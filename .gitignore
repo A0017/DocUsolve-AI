@@ -1,0 +1,7 @@
+.env
+temp_*.pdf
+__pycache__/
+.venv/
+venv/
+*.pyc
+.DS_Store
