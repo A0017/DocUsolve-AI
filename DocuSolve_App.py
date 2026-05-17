@@ -129,6 +129,9 @@ def load_models():
 
 llm_model, embeddings_model = load_models()
 
+def parse_response(resp_content):
+    return resp_content.split("</think>")[-1].strip() if "</think>" in resp_content else resp_content.strip()
+
 c1, c2 = st.columns([4, 1])
 c1.title("DocuSolve™ Enterprise")
 c1.markdown("**Secure Document Analysis & Retrieval System | v2.4.1**")
@@ -208,22 +211,30 @@ else:
         
         if run_board:
             with st.status("Assembling the Board...", expanded=True) as status:
-                st.write("👨‍⚖️ **Legal Agent** is analyzing liabilities and risks...")
-                l_ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search("liability indemnification termination warranties risk", k=5)])
-                l_prompt = ChatPromptTemplate.from_template("You are a strict Corporate Lawyer. Analyze this context for legal risks, liabilities, and problematic terms. Be concise. Ignore pleasantries.\nContext: {context}")
-                l_resp = (l_prompt | llm_model).invoke({"context": l_ctx}).content
-                l_ans = l_resp.split("</think>")[-1].strip() if "</think>" in l_resp else l_resp.strip()
+                import concurrent.futures
                 
-                st.write("💼 **Finance Agent** is auditing payment terms...")
-                f_ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search("pricing payment terms invoices penalties fees financial", k=5)])
-                f_prompt = ChatPromptTemplate.from_template("You are a Chief Financial Officer. Analyze this context for financial structure, payment terms, and hidden costs. Be concise. Ignore pleasantries.\nContext: {context}")
-                f_resp = (f_prompt | llm_model).invoke({"context": f_ctx}).content
-                f_ans = f_resp.split("</think>")[-1].strip() if "</think>" in f_resp else f_resp.strip()
+                def run_agent(query, template):
+                    ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search(query, k=5)])
+                    prompt = ChatPromptTemplate.from_template(template)
+                    return parse_response((prompt | llm_model).invoke({"context": ctx}).content)
+
+                st.write("👨‍⚖️ **Legal Agent** & 💼 **Finance Agent** are auditing the document concurrently...")
+                
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    legal_future = executor.submit(
+                        run_agent, "liability indemnification termination warranties risk", 
+                        "You are a strict Corporate Lawyer. Analyze this context for legal risks, liabilities, and problematic terms. Be concise. Ignore pleasantries.\nContext: {context}"
+                    )
+                    finance_future = executor.submit(
+                        run_agent, "pricing payment terms invoices penalties fees financial", 
+                        "You are a Chief Financial Officer. Analyze this context for financial structure, payment terms, and hidden costs. Be concise. Ignore pleasantries.\nContext: {context}"
+                    )
+                    l_ans = legal_future.result()
+                    f_ans = finance_future.result()
                 
                 st.write("👔 **Executive Agent** is synthesizing the final recommendation...")
                 e_prompt = ChatPromptTemplate.from_template("You are the CEO. Read the Legal and Financial Reports below. Provide a brief 3-sentence executive summary and a final recommendation (APPROVE, RENEGOTIATE, or REJECT).\n\nLEGAL REPORT:\n{legal}\n\nFINANCIAL REPORT:\n{finance}")
-                e_resp = (e_prompt | llm_model).invoke({"legal": l_ans, "finance": f_ans}).content
-                e_ans = e_resp.split("</think>")[-1].strip() if "</think>" in e_resp else e_resp.strip()
+                e_ans = parse_response((e_prompt | llm_model).invoke({"legal": l_ans, "finance": f_ans}).content)
                 
                 status.update(label="✅ Board Review Complete", state="complete", expanded=False)
                 
@@ -242,8 +253,7 @@ else:
                 
                 st.write("✍️ Drafting persuasive, targeted offer letter...")
                 p_prompt = ChatPromptTemplate.from_template("You are a Master Business Developer and Deal Closer. Read the context from this organizational document. First, implicitly identify their core problems and needs. Then, write a highly persuasive, targeted proposal/offer letter addressing those exact needs. Show that you understand their specific situation perfectly. Make it sound professional, confident, and irresistible. The letter should be ready to send to the organization.\n\nContext: {context}")
-                p_resp = (p_prompt | llm_model).invoke({"context": p_ctx}).content
-                p_ans = p_resp.split("</think>")[-1].strip() if "</think>" in p_resp else p_resp.strip()
+                p_ans = parse_response((p_prompt | llm_model).invoke({"context": p_ctx}).content)
                 
                 status.update(label="✅ Proposal Drafted", state="complete", expanded=False)
                 
@@ -281,7 +291,7 @@ else:
                 resp = (prompt | llm_model).invoke({"context": ctx, "question": user_query}).content
                 
                 think = resp.split("</think>")[0].replace("<think>", "").strip() if "</think>" in resp else None
-                ans = resp.split("</think>")[-1].strip() if "</think>" in resp else resp.strip()
+                ans = parse_response(resp)
                 
                 with st.chat_message("ai", avatar="🏢"):
                     if think: st.expander("🔍 Trace").write(think)
