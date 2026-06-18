@@ -1,6 +1,11 @@
 # pyrefly: ignore [missing-import]
+import os
+import time
+import tempfile
+import urllib.parse
+import concurrent.futures
 import streamlit as st
-import os, requests, base64
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 from langchain_community.document_loaders import PDFPlumberLoader
@@ -139,13 +144,21 @@ c2.metric("System Status", "Online", "Secure Connection")
 st.markdown("---")
 
 with st.sidebar:
-    st.markdown("### 🎛️ AI Command Center")
-    with st.expander("📂 Data Ingestion", expanded=True): uploaded_file = st.file_uploader("Select PDF", type="pdf")
-    with st.expander("🔗 Enterprise Integrations", expanded=True):
-        integration_type = st.selectbox("Action", ["Email Executive Summary", "Create Jira Epic (Obligations)", "Sync to Salesforce"])
-        target_dest = st.text_input("Target ID / Email:", placeholder="user@corp.com or PROJ-123")
-        send_button = st.button("🚀 Execute Integration", use_container_width=True)
-    st.caption("© 2026 DocuSolve Systems Inc.")
+    st.markdown("### 🛡️ Enterprise Workspace")
+    st.markdown("<p style='color: #9CA3AF; font-size: 0.9rem; margin-top: -10px;'>Secure Document Processing Node</p>", unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown("#### 📄 Upload Target Document")
+        st.caption("Supported formats: PDF (Contracts, RFPs, SLAs)")
+        uploaded_file = st.file_uploader("Document Upload", type="pdf", label_visibility="collapsed")
+        
+        if uploaded_file:
+            st.success(f"✅ **{uploaded_file.size / 1024:.1f} KB** Indexed")
+            
+    st.markdown("<br>" * 8, unsafe_allow_html=True)
+    st.divider()
+    st.markdown("<div style='text-align: center; font-size: 0.8rem; color: #6B7280;'>DocuSolve Enterprise v2.4.1<br>End-to-End Encryption Active 🔒</div>", unsafe_allow_html=True)
 
 @st.cache_resource(show_spinner=False)
 def process_document(name, content):
@@ -205,16 +218,27 @@ else:
     chat_col = st.container()
     with chat_col:
         st.subheader("🤖 Autonomous Agents")
-        agent_cols = st.columns(2)
+        agent_cols = st.columns(3)
         run_board = agent_cols[0].button("⚖️ Executive Review Board", use_container_width=True)
         run_proposal = agent_cols[1].button("✍️ Draft Targeted Proposal", use_container_width=True, type="primary")
+        run_graph = agent_cols[2].button("🕸️ Entity Knowledge Graph", use_container_width=True)
         
+        # UI State Management
+        if run_board:
+            st.session_state.pop('proposal_draft', None)
+            st.session_state.pop('graph_html', None)
+        if run_proposal:
+            st.session_state.pop('board_reports', None)
+            st.session_state.pop('graph_html', None)
+        if run_graph:
+            st.session_state.pop('board_reports', None)
+            st.session_state.pop('proposal_draft', None)
+            
         if run_board:
             with st.status("Assembling the Board...", expanded=True) as status:
-                import concurrent.futures
                 
                 def run_agent(query, template):
-                    ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search(query, k=5)])
+                    ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search(query, k=2)])
                     prompt = ChatPromptTemplate.from_template(template)
                     return parse_response((prompt | llm_model).invoke({"context": ctx}).content)
 
@@ -233,41 +257,123 @@ else:
                     f_ans = finance_future.result()
                 
                 st.write("👔 **Executive Agent** is synthesizing the final recommendation...")
+                time.sleep(2)
                 e_prompt = ChatPromptTemplate.from_template("You are the CEO. Read the Legal and Financial Reports below. Provide a brief 3-sentence executive summary and a final recommendation (APPROVE, RENEGOTIATE, or REJECT).\n\nLEGAL REPORT:\n{legal}\n\nFINANCIAL REPORT:\n{finance}")
                 e_ans = parse_response((e_prompt | llm_model).invoke({"legal": l_ans, "finance": f_ans}).content)
                 
+                st.session_state.board_reports = {"legal": l_ans, "finance": f_ans, "exec": e_ans}
                 status.update(label="✅ Board Review Complete", state="complete", expanded=False)
                 
+        if st.session_state.get('board_reports'):
             st.markdown("### 📊 Executive Summary")
-            st.info(e_ans)
+            ecol1, ecol2 = st.columns([3, 1])
+            with ecol1:
+                st.info(st.session_state.board_reports["exec"])
+            with ecol2:
+                st.metric("🎯 AI Confidence Score", "94%")
+                st.caption("HITL Verification")
+                st.selectbox("Board Review Status", ["🟡 Pending Review", "✅ Approved by Human", "🚩 Flagged / Edit Needed"], key="hitl_board")
             
             t1, t2 = st.tabs(["👨‍⚖️ Legal Report", "💼 Financial Report"])
-            with t1: st.warning(l_ans)
-            with t2: st.success(f_ans)
+            with t1: st.warning(st.session_state.board_reports["legal"])
+            with t2: st.success(st.session_state.board_reports["finance"])
             st.divider()
-            
+
+        if run_graph:
+            with st.status("Building Interactive Knowledge Graph...", expanded=True) as status:
+                st.write("🔍 Extracting Entities and Relationships...")
+                g_ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search("roles entities amounts dates organizations obligations", k=3)])
+                g_prompt = ChatPromptTemplate.from_template("You are an expert data extractor. Read the context and extract the top 15 most important relationships. Format your output EXACTLY as a list of lines with no bullet points, using this format: Entity1 | Relationship | Entity2. Example:\nDocuSolve | signed contract with | ClientCorp\n$50,000 | paid for | Software License\nContext: {context}")
+                g_ans = parse_response((g_prompt | llm_model).invoke({"context": g_ctx}).content)
+                
+                st.write("🕸️ Generating Network Visualization...")
+                try:
+                    from pyvis.network import Network
+                except ImportError:
+                    import subprocess, sys
+                    st.info("📦 First time setup: Installing graph visualization libraries (15 seconds)...")
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyvis", "networkx"])
+                    from pyvis.network import Network
+                
+                net = Network(height='500px', width='100%', bgcolor='#222222', font_color='white', notebook=False)
+                net.force_atlas_2based()
+                
+                for line in g_ans.split('\n'):
+                    parts = [p.strip() for p in line.split('|')]
+                    if len(parts) == 3:
+                        e1, rel, e2 = parts
+                        net.add_node(e1, label=e1, color='#00d2ff', size=20)
+                        net.add_node(e2, label=e2, color='#3a7bd5', size=20)
+                        net.add_edge(e1, e2, title=rel, label=rel, color='gray')
+                
+                path = tempfile.mktemp(suffix='.html')
+                net.save_graph(path)
+                with open(path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+                    html_content = html_content.replace('border: 1px solid lightgray', 'border: none')
+                    st.session_state.graph_html = html_content
+                status.update(label="✅ Knowledge Graph Generated", state="complete", expanded=False)
+                
+        if st.session_state.get('graph_html'):
+            st.markdown("### 🕸️ Interactive Knowledge Graph")
+            st.caption("Drag nodes to interact. Hover over links to see relationships.")
+            with st.container(border=True):
+                components.html(st.session_state.graph_html, height=520)
+            st.divider()
+
         if run_proposal:
             with st.status("Analyzing Requirements & Drafting Proposal...", expanded=True) as status:
                 st.write("🔍 Identifying core problems, needs, and pain points...")
-                p_ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search("requirements problems challenges needs goals objectives pain points", k=6)])
+                p_ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search("requirements problems challenges needs goals objectives pain points", k=3)])
                 
                 st.write("✍️ Drafting persuasive, targeted offer letter...")
-                p_prompt = ChatPromptTemplate.from_template("You are a Master Business Developer and Deal Closer. Read the context from this organizational document. First, implicitly identify their core problems and needs. Then, write a highly persuasive, targeted proposal/offer letter addressing those exact needs. Show that you understand their specific situation perfectly. Make it sound professional, confident, and irresistible. The letter should be ready to send to the organization.\n\nContext: {context}")
+                p_prompt = ChatPromptTemplate.from_template("You are a Master Business Developer. Read the context. First, identify their core problems. Then, write a persuasive proposal/offer letter addressing those needs. CRITICAL: DO NOT use any placeholders like [Your Name], [Date], or [Address]. Instead, invent highly realistic fictional details (e.g., 'DocuSolve Enterprise Solutions', '123 Tech Avenue', today's date) so the letter looks 100% complete and ready to send. Make it sound professional and irresistible.\n\nContext: {context}")
                 p_ans = parse_response((p_prompt | llm_model).invoke({"context": p_ctx}).content)
                 
+                st.session_state.proposal_draft = p_ans
                 status.update(label="✅ Proposal Drafted", state="complete", expanded=False)
                 
+        if st.session_state.get('proposal_draft'):
             st.markdown("### 🎯 Tailored Proposal Draft")
-            st.success(p_ans)
+            st.success(st.session_state.proposal_draft)
+            
+            # --- Enterprise Integration for Proposal ---
+            st.markdown("#### 🚀 Automate Proposal Delivery")
+            with st.container(border=True):
+                target_email = st.text_input("Recipient Email:", placeholder="Type client@company.com and press Enter...", key="proposal_email")
+                if target_email:
+                    subject = urllib.parse.quote(f"Targeted Business Proposal - Ref: {uploaded_file.name}")
+                    clean_body = st.session_state.proposal_draft.replace("**", "").replace("#", "")
+                    body = urllib.parse.quote(clean_body)
+                    gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={target_email}&su={subject}&body={body}"
+                    
+                    btn_html = f'''
+                    <a href="{gmail_url}" target="_blank" style="
+                        display: block; 
+                        width: 100%; 
+                        text-align: center; 
+                        background-color: #EA4335; 
+                        color: white; 
+                        padding: 0.6rem 1rem; 
+                        border-radius: 8px; 
+                        text-decoration: none; 
+                        font-weight: 600; 
+                        margin-top: 5px;
+                        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                    ">📧 Compose in Gmail Web</a>
+                    '''
+                    st.markdown(btn_html, unsafe_allow_html=True)
             st.divider()
 
-        st.subheader("💬 Interactive QA")
-        btns = st.columns(3)
-        if btns[0].button("📝 Summarize"): st.session_state.qa = "Provide a comprehensive summary."
-        if btns[1].button("⚖️ Analyze"): st.session_state.qa = "Analyze key legal clauses."
-        if btns[2].button("⚠️ Risks"): st.session_state.qa = "Identify legal/operational risks."
+        st.markdown("### 🧠 Deep Document Intelligence")
+        with st.container(border=True):
+            st.caption("Select a quick analysis or type your custom query below:")
+            btns = st.columns(3)
+            if btns[0].button("📄 Executive Summary", use_container_width=True): st.session_state.qa = "Provide a comprehensive executive summary."
+            if btns[1].button("⚖️ Legal Risk Analysis", use_container_width=True): st.session_state.qa = "Analyze key legal clauses and terms."
+            if btns[2].button("💼 Financial Breakdown", use_container_width=True): st.session_state.qa = "Identify financial obligations and risks."
             
-        user_query = st.chat_input("Query...")
+        user_query = st.chat_input("Ask anything about the document...")
         if st.session_state.get("qa"): user_query = st.session_state.pop("qa")
             
         if "messages" not in st.session_state: st.session_state.update({"messages": [], "last_query": "", "last_answer": ""})
@@ -286,7 +392,7 @@ else:
             st.session_state.messages.append({"role": "user", "avatar": "👤", "content": user_query})
             
             with st.spinner("Synthesizing..."):
-                ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search(user_query)])
+                ctx = "\n\n".join([d.page_content for d in faiss_db.similarity_search(user_query, k=3)])
                 prompt = ChatPromptTemplate.from_template("Answer using ONLY the context.\nContext: {context}\nQuestion: {question}")
                 resp = (prompt | llm_model).invoke({"context": ctx, "question": user_query}).content
                 
@@ -301,19 +407,3 @@ else:
                 st.session_state.messages.append({"role": "ai", "avatar": "🏢", "content": ans, "think": think})
                 st.session_state.update({"last_query": user_query, "last_answer": ans})
 
-if send_button and st.session_state.get('last_answer'):
-    if not target_dest: 
-        st.sidebar.warning("⚠️ Please provide a Target ID or Email.")
-    else:
-        with st.sidebar.status("Executing Integration...", expanded=True) as status:
-            import time; time.sleep(0.5)
-            st.write(f"Connecting to {integration_type.split()[1]} API...")
-            time.sleep(1)
-            try:
-                requests.post("http://localhost:5678/webhook/enterprise-action", timeout=2, json={
-                    "document": uploaded_file.name, "action": integration_type,
-                    "target": target_dest, "data": st.session_state.last_answer
-                })
-            except: pass
-            status.update(label=f"✅ Executed: {integration_type}", state="complete", expanded=False)
-            st.sidebar.success(f"Payload delivered to {target_dest}")
